@@ -1,6 +1,6 @@
 # Mobile website and ongoing updates
 
-The chosen deployment target is **GitHub + Streamlit Community Cloud**. Deployment is not complete until a repository is connected and Streamlit returns a working HTTPS address.
+The app is deployed on **GitHub + Streamlit Community Cloud** at https://tabcapture-lightcaller111.streamlit.app/.
 
 Source repository: https://github.com/lightcaller111/tabcapture
 Deployment branch: `main`. Entrypoint: `app.py`. Python: `3.12`.
@@ -23,14 +23,14 @@ Request a change here. The maintenance flow is:
 4. Streamlit detects repository changes and redeploys the existing app. Verify that the existing address reports the new version.
 5. Refresh the phone page after downloading any current PDF. No app-store submission or phone reinstall is needed.
 
-GitHub Actions runs the regression suite on pushes and pull requests. Streamlit Community Cloud deployment is independent of that workflow; test before updating the deployment branch. The source repository and deployed URL still need to be recorded here after connection.
+GitHub Actions runs the regression suite on pushes and pull requests. Streamlit Community Cloud deployment is independent of that workflow; test before updating the deployment branch.
 
 `requirements.txt` includes the PyPI `nodejs-wheel` package to supply Node.js 22 or newer; `packages.txt` supplies FFmpeg and Korean fonts. The package redistributes Node.js and is not an official Node.js distribution channel. Background references: https://pypi.org/project/nodejs-wheel-binaries/ and https://github.com/yt-dlp/yt-dlp/wiki/EJS.
 
 ## Operational limits
 
 - Keep the phone page open during processing. Sessions and downloaded videos are temporary; restarting or redeploying the server can end an in-progress extraction.
-- YouTube may reject requests from a shared hosting provider even when the same URL works on a personal computer. Local video upload remains available.
+- YouTube may reject requests from a shared hosting provider even when the same URL works on a personal computer. The supplied example returned HTTP 403 on the hosted server on 2026-11-04. Local video upload and PDF download were verified on that server.
 - Large videos can exceed free-host resources. Start with one song and a one-second sample interval; use a shorter time range for large videos.
 - The optional Dockerfile supports another container host if the free host proves unsuitable. That alternative has not been deployed or built in this workspace.
 

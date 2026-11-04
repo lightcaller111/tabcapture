@@ -1,10 +1,12 @@
 # TabCapture
 
-A local app that captures visible guitar tablature from a YouTube URL or video file and assembles selected images into a printable PDF.
+An app that captures visible guitar tablature from a YouTube URL or video file and assembles selected images into a printable PDF.
 
 ## Phone website and updates
 
-Version 1.2.0 adds a narrow-screen layout and larger touch controls. The prepared cloud target is GitHub + Streamlit Community Cloud; see [DEPLOYMENT.md](DEPLOYMENT.md) for the one-time connection and ongoing update flow. A public HTTPS address has not been assigned yet. Once connected, request changes in this task and deployed releases will appear at the same address after refreshing the phone browser.
+Open **[TabCapture](https://tabcapture-lightcaller111.streamlit.app/)** on your phone or computer. The app uses a narrow-screen layout and larger touch controls. Request changes in this task; verified releases pushed to `main` deploy automatically at the same address. Refresh after downloading your current PDF to use an update. See [DEPLOYMENT.md](DEPLOYMENT.md) for maintenance details.
+
+The hosted upload-to-PDF flow was verified on 2026-11-04. The example YouTube URL returned HTTP 403 from the cloud server, although it worked during local development. For blocked links, choose **Local video** and upload a video file, or use the desktop app. Cloud URL downloads are not guaranteed.
 
 ## Run on Windows
 
@@ -39,7 +41,7 @@ python -m streamlit run app.py --server.address 127.0.0.1 --server.maxUploadSize
 - Downloads prefer H.264 video up to 1080p for fast decoding. Source quality limits PDF sharpness.
 - YouTube may block automated downloads. Update yt-dlp with `.venv\Scripts\python.exe -m pip install -U "yt-dlp[default]"`, check Node.js/Deno, or upload a video you already have. The app does not read browser cookies.
 - Videos are stored in a temporary session directory; captures use memory. Above 1,000 captures, extraction asks you to reduce the range. For long videos, process shorter ranges.
-- The app listens only on localhost. Use videos you have permission to download and reproduce.
+- The Windows launcher listens only on localhost; the hosted website is public. Use videos you have permission to download and reproduce.
 
 ## Tests
 

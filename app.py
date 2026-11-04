@@ -45,7 +45,7 @@ with st.expander("1 · Load a video", expanded="video" not in st.session_state):
                 st.rerun()
             except Exception as error:
                 st.error(f"Unable to load video: {error}")
-                st.info("YouTube may restrict downloads. Update yt-dlp, install Node.js or Deno, or upload a local video.")
+                st.info("YouTube can block downloads from this hosting server. Choose Local video above to upload a video file from your phone or computer, or try the desktop app. Refreshing or signing in to YouTube on your phone does not change the server's access.")
             finally:
                 bar.empty()
     else:

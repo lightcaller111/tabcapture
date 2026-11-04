@@ -1,5 +1,10 @@
 # Release notes
 
+## 1.2.1
+- Published the phone website and connected automatic deployments from GitHub.
+- Clarified the upload fallback when YouTube blocks a hosted download.
+- Pinned Streamlit to the locally tested UI version for reproducible deployments.
+
 ## 1.2.0
 - Phone-friendly stacked controls, larger touch targets, and full-width action buttons.
 - Version shown in About / updates.
