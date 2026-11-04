@@ -18,6 +18,19 @@ def tab(note="3"):
     return frame
 
 class CoreTests(unittest.TestCase):
+    def test_light_staff_with_extra_tie_line(self):
+        from core import print_image
+        frame = 255 - tab()
+        cv2.line(frame, (200, 266), (750, 266), (230,230,230), 1)
+        box = detect_tab(frame)
+        self.assertIsNotNone(box)
+        self.assertLessEqual(box[1], 230)
+        self.assertGreaterEqual(box[3], 340)
+        clean = print_image(frame)
+        self.assertGreater(np.mean(clean == 255), .9)
+        self.assertLess(clean[260, 80], 30)
+        self.assertGreater(np.count_nonzero(clean < 80), 1500)
+
     def test_url_single_video(self):
         self.assertEqual(youtube_url("https://www.youtube.com/watch?v=JM8FljbhjV8&list=x&index=4"), "https://www.youtube.com/watch?v=JM8FljbhjV8")
         self.assertEqual(youtube_url("https://youtu.be/JM8FljbhjV8"), "https://www.youtube.com/watch?v=JM8FljbhjV8")

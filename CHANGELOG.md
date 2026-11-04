@@ -1,5 +1,10 @@
 # Release notes
 
+## 1.3.0
+- Empty URL field with the placeholder Enter the URL.
+- Detect light staff lines on dark backgrounds even when ties add extra horizontal lines.
+- Convert dark translucent tab panels to white paper with dark notation.
+
 ## 1.2.1
 - Published the phone website and connected automatic deployments from GitHub.
 - Clarified the upload fallback when YouTube blocks a hosted download.

@@ -36,7 +36,7 @@ def load(path, title, source):
 with st.expander("1 · Load a video", expanded="video" not in st.session_state):
     mode = st.radio("Video source", ["YouTube URL", "Local video"], horizontal=True)
     if mode == "YouTube URL":
-        url = st.text_input("YouTube video URL", "https://www.youtube.com/watch?v=JM8FljbhjV8")
+        url = st.text_input("YouTube video URL", placeholder="Enter the URL")
         if st.button("Load from YouTube", type="primary"):
             bar = st.progress(0., text="Downloading video...")
             try:
@@ -75,6 +75,7 @@ except Exception as error:
     st.stop()
 automatic = detect_tab(frame)
 layout = st.radio("Tab movement", ["Horizontal scrolling", "Changing pages / rows"], horizontal=True)
+st.caption("Choose Changing pages / rows when the video replaces a whole tab row instead of sliding it sideways.")
 crop_mode = st.radio("Capture area", ["Automatic detection", "Fixed crop"], horizontal=True)
 region = None
 if crop_mode == "Fixed crop":

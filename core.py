@@ -119,18 +119,23 @@ def detect_tab(frame):
     scale = min(1., 1280 / width)
     small = cv2.resize(frame, (round(width * scale), round(height * scale)))
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    base = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 9)
     systems = []
-    for mask in (base, 255 - base):
+    # Threshold each polarity separately: complementing a dark-ink mask
+    # produces thick background bands, not thin light staff lines.
+    for polarity in (gray, 255 - gray):
+        mask = cv2.adaptiveThreshold(polarity, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 9)
         horizontal = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((1, max(20, mask.shape[1] // 30)), np.uint8))
         ys = np.flatnonzero((horizontal > 0).sum(axis=1) > mask.shape[1] * .22)
         groups = np.split(ys, np.where(np.diff(ys) > 2)[0] + 1)
         rows = [int(np.mean(g)) for g in groups if 0 < len(g) <= 4]
-        for i in range(len(rows) - 5):
-            run = rows[i:i + 6]
-            gaps = np.diff(run)
-            gap = float(np.median(gaps))
-            if 4 <= gap <= 55 and np.max(np.abs(gaps - gap)) <= max(2, gap * .18):
+        for i, first in enumerate(rows):
+            for last in rows[i + 5:]:
+                gap = (last - first) / 5
+                if not 4 <= gap <= 55:
+                    continue
+                run = [min(rows, key=lambda y: abs(y - (first + n * gap))) for n in range(6)]
+                if len(set(run)) != 6 or any(abs(y - (first + n * gap)) > max(2, gap * .18) for n, y in enumerate(run)):
+                    continue
                 points = np.where(horizontal[max(0, run[0] - 1):run[-1] + 2] > 0)[1]
                 if len(points):
                     systems.append((int(points.min()), run[0], int(points.max()), run[-1], gap))
@@ -138,9 +143,9 @@ def detect_tab(frame):
         return None
     gap = max(s[4] for s in systems)
     x1 = max(0, min(s[0] for s in systems) - 25)
-    x2 = min(base.shape[1], max(s[2] for s in systems) + 26)
+    x2 = min(gray.shape[1], max(s[2] for s in systems) + 26)
     y1 = max(0, int(min(s[1] for s in systems) - gap * 4))
-    y2 = min(base.shape[0], int(max(s[3] for s in systems) + gap * 4.5))
+    y2 = min(gray.shape[0], int(max(s[3] for s in systems) + gap * 4.5))
     return tuple(int(v / scale) for v in (x1, y1, x2, y2))
 
 
@@ -155,7 +160,10 @@ def crop_frame(frame, region):
 
 
 def signature(image):
-    mask = ink_mask(image)
+    if dark_paper(image):
+        mask = cv2.threshold(print_image(image), 140, 255, cv2.THRESH_BINARY_INV)[1]
+    else:
+        mask = ink_mask(image)
     # Remove staff lines and tall playhead/bar lines for comparison only.
     horizontal = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((1, max(25, mask.shape[1] // 8)), np.uint8))
     vertical = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((max(25, mask.shape[0] // 4), 1), np.uint8))
@@ -216,6 +224,7 @@ def extract(path, interval=1., region=None, threshold=.15, start=0., end=None, p
     if interval <= 0 or not 0 <= start < end:
         raise ValueError('Choose a positive interval and an end time after the start time.')
     captures, previous, last_shape = [], None, None
+    previous_box = None
     total = math.ceil((end - start) / interval)
     missed = 0
     frames = sampled_frames(path, metadata, interval, start, end, region)
@@ -230,6 +239,9 @@ def extract(path, interval=1., region=None, threshold=.15, start=0., end=None, p
             if box is None:
                 missed += 1
                 continue
+            if previous_box is not None and max(abs(a - b) for a, b in zip(box, previous_box)) <= 5:
+                box = previous_box
+            previous_box = box
             cropped = crop_frame(frame, box)
             gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
             if float(np.percentile(gray, 99) - np.percentile(gray, 1)) < 45:
@@ -258,6 +270,28 @@ def extract(path, interval=1., region=None, threshold=.15, start=0., end=None, p
 
 def timestamp(seconds):
     return f'{int(seconds) // 60:02d}:{int(seconds) % 60:02d}'
+
+
+def dark_paper(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    return np.mean(mask) > 127.5
+
+
+def print_image(image):
+    """Return dark notation on white paper, including translucent dark panels."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if dark_paper(image):
+        # Remove slowly varying video showing through a dark overlay while
+        # preserving thin staff lines, numbers, ties, and rhythm stems.
+        kernel_size = max(9, (gray.shape[0] // 18) | 1)
+        ink = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT,
+                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)))
+        noise = max(12., float(np.percentile(ink, 85)))
+        peak = max(noise + 1, float(np.percentile(ink, 99)))
+        return (255 * (1 - np.clip((ink.astype(float) - noise) / (peak - noise), 0, 1))).astype(np.uint8)
+    white = max(1., float(np.percentile(gray, 85)))
+    return (255 * np.clip(gray.astype(float) / white, 0, 1) ** 1.25).astype(np.uint8)
 
 
 def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochrome=True, show_timestamps=False):
@@ -299,12 +333,7 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
         rgb = cv2.cvtColor(capture.image, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
         if monochrome:
-            gray = cv2.cvtColor(capture.image, cv2.COLOR_BGR2GRAY)
-            if np.median(gray) < 115:
-                gray = 255 - gray
-            white = max(1., float(np.percentile(gray, 85)))
-            clean = np.clip(gray.astype(float) / white, 0, 1) ** 1.25
-            image = Image.fromarray((clean * 255).astype(np.uint8))
+            image = Image.fromarray(print_image(capture.image))
         iw, ih = image.size
         scale = min((width - margin * 2) / nominal_width, (height - 120) / ih)
         draw_w, draw_h = iw * scale, ih * scale
