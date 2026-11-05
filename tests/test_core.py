@@ -18,6 +18,25 @@ def tab(note="3"):
     return frame
 
 class CoreTests(unittest.TestCase):
+    def test_pdf_rows_fill_width_without_enlarging_short_tail(self):
+        from unittest.mock import patch
+        from reportlab.pdfgen.canvas import Canvas
+        from reportlab.lib.pagesizes import A4
+        rows = []
+        for width in (1200,1600,2000,300):
+            image = np.full((200,width,3),255,np.uint8)
+            for y in range(50,151,20):
+                cv2.line(image,(0,y),(width-1,y),(0,0,0),1)
+            rows.append(Capture(0,image))
+        original = Canvas.drawImage
+        with patch.object(Canvas, 'drawImage', autospec=True, side_effect=original) as draw:
+            data = make_pdf(rows)
+        self.assertTrue(data.startswith(b'%PDF'))
+        widths = [call.args[4] for call in draw.call_args_list]
+        self.assertTrue(all(abs(w - (A4[0] - 56)) < .01 for w in widths[:3]))
+        self.assertLess(widths[-1], widths[0] / 2)
+        self.assertTrue(all(call.args[3] >= 28 for call in draw.call_args_list))
+
     def test_dark_four_bar_row_stays_whole(self):
         from core import barline_positions, reflow_pages
         frame = np.zeros((276, 1815, 3), np.uint8)

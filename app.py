@@ -137,7 +137,8 @@ if "report" in st.session_state:
     st.info(st.session_state.report)
     breaks = st.session_state.get("stitch_stats", {}).get("breaks", 0)
     if breaks:
-        st.warning(f"{breaks} scrolling transitions could not be joined confidently. Those sections were kept separately; check them for overlap.")
+        times = ", ".join(timestamp(t) for t in st.session_state.stitch_stats.get("break_times", []))
+        st.warning(f"{breaks} scrolling transitions could not be joined confidently" + (f" near {times}" if times else "") + ". Those sections were kept separately to avoid dropping notes. Review them for repeated bars or missing content. Try a 0.5-second sampling interval and a fixed crop containing only the tab panel, then extract again.")
 st.subheader("3 · Review and export")
 if box and st.button("Add current preview as a manual capture"):
     previous_selection = {id(cap): st.session_state.selected.get(i, True)

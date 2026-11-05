@@ -310,8 +310,29 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
                 title_font = 'TabCaptureTitle'
                 break
     width, height = size
-    nominal_width = max(capture.image.shape[1] for capture in captures)
-    margin, page = 36, 0
+    margin, page = 28, 0
+    prepared = []
+    for capture in captures:
+        pixels = print_image(capture.image) if monochrome else cv2.cvtColor(capture.image, cv2.COLOR_BGR2RGB)
+        # Trim empty vertical padding, retaining notation above/below the staff.
+        gray = pixels if pixels.ndim == 2 else cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY)
+        ink = gray < 210 if np.median(gray) >= 115 else gray > 100
+        occupied = np.flatnonzero(ink.sum(axis=1) >= 2)
+        if len(occupied):
+            padding = max(6, round(gray.shape[0] * .025))
+            pixels = pixels[max(0, occupied[0] - padding):min(len(pixels), occupied[-1] + padding + 1)]
+        prepared.append((capture, Image.fromarray(pixels)))
+    typical_ratio = float(np.median([image.width / image.height for _, image in prepared]))
+    laid_out = []
+    for capture, image in prepared:
+        iw, ih = image.size
+        # Fit ordinary rows independently, so a very wide stitched strip cannot
+        # shrink every other row. Retain the size of genuinely short fragments.
+        target_width = width - 2 * margin
+        if iw / ih < typical_ratio * .55:
+            target_width *= (iw / ih) / typical_ratio
+        scale = min(target_width / iw, (height - 120) / ih)
+        laid_out.append((capture, image, iw * scale, ih * scale))
     def new_page():
         nonlocal page
         if page:
@@ -328,26 +349,33 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
             doc.drawString(margin, 20, 'Source video')
             doc.linkURL(source, (margin, 17, margin + 55, 29), relative=0)
         return height - 60
-    y = new_page()
-    for capture in captures:
-        rgb = cv2.cvtColor(capture.image, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(rgb)
-        if monochrome:
-            image = Image.fromarray(print_image(capture.image))
-        iw, ih = image.size
-        scale = min((width - margin * 2) / nominal_width, (height - 120) / ih)
-        draw_w, draw_h = iw * scale, ih * scale
-        if y - draw_h - 24 < margin:
-            y = new_page()
-        doc.setFont('Helvetica', 7)
-        doc.setFillColorRGB(.35, .39, .44)
-        if show_timestamps:
-            doc.drawString(margin, y - 8, timestamp(capture.time))
-        elif getattr(capture, 'bar_number', None) is not None:
-            doc.drawString(margin, y - 8, str(capture.bar_number))
-        doc.drawImage(ImageReader(image), margin, y - 12 - draw_h, draw_w, draw_h)
-        doc.setFillColorRGB(0, 0, 0)
-        y -= draw_h + 24
+    pages, pending, used = [], [], 0
+    available = height - 60 - margin
+    for row in laid_out:
+        needed = row[3] + 24
+        if pending and used + needed > available:
+            pages.append(pending)
+            pending, used = [], 0
+        pending.append(row)
+        used += needed
+    if pending:
+        pages.append(pending)
+    for page_index, rows in enumerate(pages):
+        y = new_page()
+        # Balance full pages down to the bottom margin; leave the last partial
+        # page naturally spaced instead of stretching a few rows vertically.
+        extra = max(0, available - sum(row[3] + 24 for row in rows))
+        gap = 12 + (extra / (len(rows) - 1) if page_index < len(pages) - 1 and len(rows) > 1 else 0)
+        for capture, image, draw_w, draw_h in rows:
+            doc.setFont('Helvetica', 7)
+            doc.setFillColorRGB(.35, .39, .44)
+            if show_timestamps:
+                doc.drawString(margin, y - 8, timestamp(capture.time))
+            elif getattr(capture, 'bar_number', None) is not None:
+                doc.drawString(margin, y - 8, str(capture.bar_number))
+            doc.drawImage(ImageReader(image), margin, y - 12 - draw_h, draw_w, draw_h)
+            doc.setFillColorRGB(0, 0, 0)
+            y -= draw_h + 12 + gap
     doc.save()
     return buffer.getvalue()
 
@@ -426,7 +454,7 @@ def reflow_pages(captures, bars_per_line=4):
 def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
     """Join overlapping left-moving tab windows; split the strip into print rows."""
     if stats is not None:
-        stats.update(joins=0, breaks=0)
+        stats.update(joins=0, breaks=0, break_times=[])
     if not captures:
         return []
     rows, chunks, positions = [], [captures[0].image], [(0, captures[0].time)]
@@ -498,6 +526,7 @@ def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
         if current.shape != previous.shape:
             if stats is not None:
                 stats['breaks'] += 1
+                stats['break_times'].append(capture.time)
             finish()
             chunks, positions = [current], [(0, capture.time)]
             total_width = current.shape[1]
@@ -518,6 +547,7 @@ def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
         else:
             if stats is not None:
                 stats['breaks'] += 1
+                stats['break_times'].append(capture.time)
             # A page jump or uncertain match starts a separate strip.
             finish()
             chunks, positions = [current], [(0, capture.time)]

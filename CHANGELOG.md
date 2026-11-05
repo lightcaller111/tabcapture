@@ -1,5 +1,11 @@
 # Release notes
 
+## 1.4.0
+- Fit normal tab rows to the printable page width independently, with narrower margins.
+- Trim empty vertical padding and balance row spacing on full pages.
+- Keep short fragments proportional instead of enlarging them into oversized notation.
+- Show video timestamps and recovery guidance for uncertain scrolling transitions.
+
 ## 1.3.1
 - Fixed dark-panel barline detection and excluded opening staff borders from measure counts.
 - Applied Bars per line to changing rows as well as scrolling tabs.
