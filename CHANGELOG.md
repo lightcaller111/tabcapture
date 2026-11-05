@@ -1,5 +1,11 @@
 # Release notes
 
+## 1.6.1
+- Detect strings interrupted by dense chord numbers, avoiding missing captures and false changes in guitar-part count.
+- Reject opposite-polarity halos when locating string lines, keeping captures aligned.
+- Stop the automatic crop at a clear white tab-panel edge so the performance video does not print as a dark border.
+- Verified Jingle Bell Rock end to end with the default one-second sampling and upper-part selection.
+
 ## 1.6.0
 - Match consecutive bar boundaries when the video changes measure spacing, preserving one continuous strip before wrapping into four-bar rows.
 - Avoid needless horizontal resizing caused by tiny staff-detection variations.

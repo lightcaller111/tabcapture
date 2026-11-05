@@ -113,6 +113,20 @@ def ink_mask(image):
     return 255 - mask if np.mean(mask) > 127.5 else mask
 
 
+def staff_contrast(polarity, horizontal, run, gap):
+    """Reject bright halos next to strings when testing the opposite polarity."""
+    distance = max(2, round(gap * .3))
+    contrasts = []
+    for y in run:
+        xs = horizontal[y] > 0
+        if not np.any(xs):
+            return 0.
+        above = polarity[max(0, y-distance), xs].astype(float)
+        below = polarity[min(len(polarity)-1, y+distance), xs].astype(float)
+        contrasts.append(float(np.median((above + below) / 2 - polarity[y, xs])))
+    return float(np.median(contrasts))
+
+
 def detect_tab(frame):
     """Find six evenly spaced horizontal lines in either image polarity."""
     height, width = frame.shape[:2]
@@ -124,7 +138,9 @@ def detect_tab(frame):
     # produces thick background bands, not thin light staff lines.
     for polarity in (gray, 255 - gray):
         mask = cv2.adaptiveThreshold(polarity, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 9)
-        horizontal = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((1, max(20, mask.shape[1] // 30)), np.uint8))
+        # Chord numbers erase short pieces of every string. Requiring a long
+        # uninterrupted run loses whole staffs in dense rhythm-guitar parts.
+        horizontal = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((1, max(12, mask.shape[1] // 64)), np.uint8))
         ys = np.flatnonzero((horizontal > 0).sum(axis=1) > mask.shape[1] * .22)
         groups = np.split(ys, np.where(np.diff(ys) > 2)[0] + 1)
         rows = [int(np.mean(g)) for g in groups if 0 < len(g) <= 4]
@@ -136,6 +152,8 @@ def detect_tab(frame):
                 run = [min(rows, key=lambda y: abs(y - (first + n * gap))) for n in range(6)]
                 if len(set(run)) != 6 or any(abs(y - (first + n * gap)) > max(2, gap * .18) for n, y in enumerate(run)):
                     continue
+                if staff_contrast(polarity, horizontal, run, gap) < 12:
+                    continue
                 points = np.where(horizontal[max(0, run[0] - 1):run[-1] + 2] > 0)[1]
                 if len(points):
                     systems.append((int(points.min()), run[0], int(points.max()), run[-1], gap))
@@ -146,6 +164,17 @@ def detect_tab(frame):
     x2 = min(gray.shape[1], max(s[2] for s in systems) + 26)
     y1 = max(0, int(min(s[1] for s in systems) - gap * 4))
     y2 = min(gray.shape[0], int(max(s[3] for s in systems) + gap * 4.5))
+    # The desired annotation margin can extend into the performance video.
+    # Stop at an unmistakable full-width white-panel edge, when present,
+    # instead of printing a dark strip of the guitarist above every row.
+    panel = gray[y1:min(y1 + round(gap*2), min(s[1] for s in systems)), x1:x2]
+    if len(panel) >= 8:
+        white = (panel > 210).mean(axis=1)
+        if white[0] < .5:
+            for offset in range(1, len(panel)-6):
+                if np.all(white[offset:offset+6] > .9):
+                    y1 += offset
+                    break
     return tuple(int(v / scale) for v in (x1, y1, x2, y2))
 
 
@@ -155,7 +184,7 @@ def tab_system_rows(image):
     candidates = []
     for polarity in (gray, 255 - gray):
         mask = cv2.adaptiveThreshold(polarity,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY_INV,31,9)
-        horizontal = cv2.morphologyEx(mask,cv2.MORPH_OPEN,np.ones((1,max(30,gray.shape[1]//25)),np.uint8))
+        horizontal = cv2.morphologyEx(mask,cv2.MORPH_OPEN,np.ones((1,max(12,gray.shape[1]//64)),np.uint8))
         ys = np.flatnonzero((horizontal > 0).mean(axis=1) > .25)
         groups = np.split(ys,np.where(np.diff(ys)>2)[0]+1)
         lines = [int(np.mean(g)) for g in groups if 0 < len(g) <= 5]
@@ -166,6 +195,8 @@ def tab_system_rows(image):
                     continue
                 run = [min(lines,key=lambda y:abs(y-first-n*gap)) for n in range(6)]
                 if len(set(run)) == 6 and all(abs(y-first-n*gap)<=max(2,gap*.12) for n,y in enumerate(run)):
+                    if staff_contrast(polarity, horizontal, run, gap) < 12:
+                        continue
                     coverage = float(np.mean([(horizontal[y] > 0).mean() for y in run]))
                     error = float(np.mean([abs(y-first-n*gap) for n,y in enumerate(run)])) / gap
                     candidates.append((coverage - error, gap, run))

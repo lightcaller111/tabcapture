@@ -18,6 +18,36 @@ def tab(note="3"):
     return frame
 
 class CoreTests(unittest.TestCase):
+    def test_dense_chords_do_not_hide_a_string_or_change_part_count(self):
+        from core import tab_system_rows, select_tab_part
+        frame = np.full((400,1280,3),245,np.uint8)
+        for y in range(200,301,20):
+            cv2.line(frame,(0,y),(1279,y),(90,90,90),1)
+        # A dense chord rhythm interrupts one string more often than the
+        # former long-line filter allowed. All six strings are still present.
+        for x in range(0,1280,42):
+            cv2.rectangle(frame,(x,233),(x+17,247),(245,245,245),-1)
+            cv2.putText(frame,'7',(x+1,246),cv2.FONT_HERSHEY_SIMPLEX,.45,(0,0,0),1)
+        box = detect_tab(frame)
+        self.assertIsNotNone(box)
+        self.assertLess(box[1],200)
+        self.assertGreaterEqual(box[3],300)
+        self.assertEqual(len(tab_system_rows(frame)),1)
+        self.assertTrue(np.array_equal(select_tab_part(frame,'upper'),frame))
+
+    def test_auto_crop_stops_at_white_panel_edge(self):
+        frame = np.full((400,1280,3),245,np.uint8)
+        frame[:130] = (30,60,90)
+        for y in range(200,301,20):
+            cv2.line(frame,(0,y),(1279,y),(90,90,90),1)
+        cv2.putText(frame,'Am',(40,160),cv2.FONT_HERSHEY_SIMPLEX,.6,(0,0,0),1)
+        box = detect_tab(frame)
+        self.assertIsNotNone(box)
+        self.assertGreaterEqual(box[1],130)
+        self.assertLess(box[1],145)
+        self.assertGreaterEqual(box[3],300)
+
+
     def test_reflow_matches_ordered_bars_without_duplicating_overlap(self):
         from core import matching_bar_boundary, stitch_scroll
         rng = np.random.default_rng(56)
