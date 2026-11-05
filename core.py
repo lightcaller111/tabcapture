@@ -149,6 +149,47 @@ def detect_tab(frame):
     return tuple(int(v / scale) for v in (x1, y1, x2, y2))
 
 
+def tab_system_rows(image):
+    """Locate distinct six-string staffs without treating two parts as one."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    candidates = []
+    for polarity in (gray, 255 - gray):
+        mask = cv2.adaptiveThreshold(polarity,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY_INV,31,9)
+        horizontal = cv2.morphologyEx(mask,cv2.MORPH_OPEN,np.ones((1,max(30,gray.shape[1]//25)),np.uint8))
+        ys = np.flatnonzero((horizontal > 0).mean(axis=1) > .25)
+        groups = np.split(ys,np.where(np.diff(ys)>2)[0]+1)
+        lines = [int(np.mean(g)) for g in groups if 0 < len(g) <= 5]
+        for i, first in enumerate(lines):
+            for last in lines[i+5:]:
+                gap = (last-first)/5
+                if not 4 <= gap <= 80:
+                    continue
+                run = [min(lines,key=lambda y:abs(y-first-n*gap)) for n in range(6)]
+                if len(set(run)) == 6 and all(abs(y-first-n*gap)<=max(2,gap*.12) for n,y in enumerate(run)):
+                    coverage = float(np.mean([(horizontal[y] > 0).mean() for y in run]))
+                    error = float(np.mean([abs(y-first-n*gap) for n,y in enumerate(run)])) / gap
+                    candidates.append((coverage - error, gap, run))
+    selected = []
+    for _, gap, run in sorted(candidates, key=lambda item:(-item[0],item[1],item[2][0])):
+        if not any(run[0] <= old[-1]+gap and run[-1] >= old[0]-gap for old in selected):
+            selected.append(run)
+    return sorted(selected,key=lambda run:run[0])
+
+
+def select_tab_part(image, part='all'):
+    if part not in ('all','upper'):
+        raise ValueError('Choose all or upper tab parts.')
+    if part == 'all':
+        return image
+    systems = tab_system_rows(image)
+    if len(systems) < 2:
+        return image
+    # Keep the upper part's rhythm stems/ties, stopping before the lower staff.
+    gap = float(np.median(np.diff(systems[0])))
+    end = min(systems[1][0] - max(3,int(gap*.7)), int(systems[0][-1] + gap*4.5) + 1)
+    return image[:end].copy()
+
+
 def crop_frame(frame, region):
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = region
@@ -218,7 +259,7 @@ def sampled_frames(path, metadata, interval, start, end, region=None):
                 process.wait()
 
 
-def extract(path, interval=1., region=None, threshold=.15, start=0., end=None, progress=None, max_captures=1000):
+def extract(path, interval=1., region=None, threshold=.15, start=0., end=None, progress=None, max_captures=1000, part='all'):
     metadata = video_info(path)
     end = min(end if end is not None else metadata['duration'], metadata['duration'])
     if interval <= 0 or not 0 <= start < end:
@@ -242,7 +283,7 @@ def extract(path, interval=1., region=None, threshold=.15, start=0., end=None, p
             if previous_box is not None and max(abs(a - b) for a, b in zip(box, previous_box)) <= 5:
                 box = previous_box
             previous_box = box
-            cropped = crop_frame(frame, box)
+            cropped = select_tab_part(crop_frame(frame, box), part)
             gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
             if float(np.percentile(gray, 99) - np.percentile(gray, 1)) < 45:
                 missed += 1
@@ -294,9 +335,11 @@ def print_image(image):
     return (255 * np.clip(gray.astype(float) / white, 0, 1) ** 1.25).astype(np.uint8)
 
 
-def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochrome=True, show_timestamps=False):
+def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochrome=True, show_timestamps=False, rows_per_page=5):
     if not captures:
         raise ValueError('Select at least one capture before exporting.')
+    if not isinstance(rows_per_page, int) or not 1 <= rows_per_page <= 10:
+        raise ValueError('Choose between 1 and 10 tab rows per page.')
     buffer = BytesIO()
     size = A4 if paper == 'A4' else letter
     doc = canvas.Canvas(buffer, pagesize=size)
@@ -322,16 +365,17 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
             padding = max(6, round(gray.shape[0] * .025))
             pixels = pixels[max(0, occupied[0] - padding):min(len(pixels), occupied[-1] + padding + 1)]
         prepared.append((capture, Image.fromarray(pixels)))
-    typical_ratio = float(np.median([image.width / image.height for _, image in prepared]))
+    typical_width = float(np.median([image.width for _, image in prepared]))
     laid_out = []
     for capture, image in prepared:
         iw, ih = image.size
         # Fit ordinary rows independently, so a very wide stitched strip cannot
         # shrink every other row. Retain the size of genuinely short fragments.
         target_width = width - 2 * margin
-        if iw / ih < typical_ratio * .55:
-            target_width *= (iw / ih) / typical_ratio
-        scale = min(target_width / iw, (height - 120) / ih)
+        if iw < typical_width * .55:
+            target_width *= iw / typical_width
+        slot_height = (height - 60 - margin) / rows_per_page
+        scale = min(target_width / iw, (slot_height - 24) / ih)
         laid_out.append((capture, image, iw * scale, ih * scale))
     def new_page():
         nonlocal page
@@ -353,7 +397,7 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
     available = height - 60 - margin
     for row in laid_out:
         needed = row[3] + 24
-        if pending and used + needed > available:
+        if pending and (len(pending) >= rows_per_page or used + needed > available + .01):
             pages.append(pending)
             pending, used = [], 0
         pending.append(row)
@@ -365,7 +409,7 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
         # Balance full pages down to the bottom margin; leave the last partial
         # page naturally spaced instead of stretching a few rows vertically.
         extra = max(0, available - sum(row[3] + 24 for row in rows))
-        gap = 12 + (extra / (len(rows) - 1) if page_index < len(pages) - 1 and len(rows) > 1 else 0)
+        gap = 12 + (extra / (len(rows) - 1) if len(rows) == rows_per_page and len(rows) > 1 else 0)
         for capture, image, draw_w, draw_h in rows:
             doc.setFont('Helvetica', 7)
             doc.setFillColorRGB(.35, .39, .44)
@@ -381,21 +425,25 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
 
 def scroll_offset(previous, current, minimum_match=.78):
     """Verify the entire overlap, including jumps larger than half a window."""
-    width = current.shape[1]
+    width = previous.shape[1]
     old = cv2.cvtColor(previous, cv2.COLOR_BGR2GRAY)
     new = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
     candidates = []
     for left, right in ((.52, .92), (.78, .98)):
         x1, x2 = int(width * left), int(width * right)
+        if x2 - x1 > new.shape[1]:
+            continue
         matches = cv2.matchTemplate(new, old[:, x1:x2], cv2.TM_CCOEFF_NORMED)
-        # Exclude backwards motion and matches beyond the available overlap.
-        allowed = matches[:, :min(matches.shape[1], x1 + 4)]
+        allowed = matches
         _, score, _, location = cv2.minMaxLoc(allowed)
         shift = x1 - location[0]
-        if score < minimum_match or shift < -3:
+        if score < minimum_match:
             continue
-        shift = max(0, shift)
-        overlap_score = float(cv2.matchTemplate(new[:, :width-shift], old[:, shift:], cv2.TM_CCOEFF_NORMED)[0, 0])
+        old_start, new_start = max(0, shift), max(0, -shift)
+        overlap = min(old.shape[1] - old_start, new.shape[1] - new_start)
+        if overlap < max(40, min(old.shape[1], new.shape[1]) * .2):
+            continue
+        overlap_score = float(cv2.matchTemplate(new[:, new_start:new_start+overlap], old[:, old_start:old_start+overlap], cv2.TM_CCOEFF_NORMED)[0, 0])
         if overlap_score >= minimum_match:
             candidates.append((overlap_score, -shift, shift))
     return max(candidates)[2] if candidates else None
@@ -451,14 +499,47 @@ def reflow_pages(captures, bars_per_line=4):
     return result
 
 
+def normalize_scroll_staff(captures):
+    if len(captures) < 2:
+        return captures
+    systems = [tab_system_rows(cap.image) for cap in captures]
+    gaps = [float(np.mean(np.diff(parts[0]))) for parts in systems if len(parts) == 1]
+    if not gaps:
+        return captures
+    single_heights = {cap.image.shape[0] for cap, parts in zip(captures, systems) if len(parts) == 1}
+    if max(gaps) / min(gaps) < 1.04 and len(single_heights) <= 1:
+        return captures
+    target_gap = float(np.median(gaps))
+    top = round(target_gap * 4)
+    height = round(target_gap * 13.5) + 1
+    result = []
+    for cap, parts in zip(captures, systems):
+        if len(parts) != 1:
+            result.append(cap)
+            continue
+        factor = target_gap / float(np.mean(np.diff(parts[0])))
+        source = cv2.resize(cap.image, (round(cap.image.shape[1]*factor),round(cap.image.shape[0]*factor)), interpolation=cv2.INTER_CUBIC)
+        background = 0 if dark_paper(cap.image) else 255
+        normalized = np.full((height,source.shape[1],3),background,np.uint8)
+        offset = top - round(parts[0][0]*factor)
+        source_start, dest_start = max(0,-offset), max(0,offset)
+        length = min(len(source)-source_start,height-dest_start)
+        if length > 0:
+            normalized[dest_start:dest_start+length] = source[source_start:source_start+length]
+        result.append(Capture(cap.time,normalized,cap.bar_number))
+    return result
+
+
 def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
     """Join overlapping left-moving tab windows; split the strip into print rows."""
     if stats is not None:
-        stats.update(joins=0, breaks=0, break_times=[])
+        stats.update(joins=0, breaks=0, break_times=[], layout_changes=0)
     if not captures:
         return []
+    captures = normalize_scroll_staff(captures)
     rows, chunks, positions = [], [captures[0].image], [(0, captures[0].time)]
     previous = captures[0].image
+    previous_parts = len(tab_system_rows(previous))
     total_width = previous.shape[1]
     next_bar = 1
 
@@ -523,23 +604,28 @@ def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
 
     for capture in captures[1:]:
         current = capture.image
-        if current.shape != previous.shape:
+        current_parts = len(tab_system_rows(current))
+        layout_changed = current_parts != previous_parts
+        if current.shape[0] != previous.shape[0] or layout_changed:
             if stats is not None:
                 stats['breaks'] += 1
                 stats['break_times'].append(capture.time)
+                stats['layout_changes'] += int(layout_changed)
             finish()
             chunks, positions = [current], [(0, capture.time)]
             total_width = current.shape[1]
             previous = current
+            previous_parts = current_parts
             continue
         shift = scroll_offset(previous, current, minimum_match)
         if shift is not None:
-            if shift > 2:
+            advance = shift + current.shape[1] - previous.shape[1]
+            if advance > 2:
                 if stats is not None:
                     stats['joins'] += 1
                 positions.append((total_width, capture.time))
-                chunks.append(current[:, -shift:].copy())
-                total_width += shift
+                chunks.append(current[:, -advance:].copy())
+                total_width += advance
             else:
                 # Keep the reference until tiny movements accumulate; otherwise
                 # slow scrolling silently loses pixels at every sample.
@@ -553,5 +639,6 @@ def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
             chunks, positions = [current], [(0, capture.time)]
             total_width = current.shape[1]
         previous = current
+        previous_parts = current_parts
     finish()
     return rows

@@ -3,7 +3,7 @@ import tempfile
 import cv2
 import streamlit as st
 from version import __version__
-from core import reflow_pages
+from core import reflow_pages, select_tab_part
 from core import download_video, video_info, frame_at, detect_tab, crop_frame, extract, make_pdf, timestamp, Capture, youtube_url, stitch_scroll
 
 st.set_page_config(page_title="TabCapture", page_icon="🎸", layout="wide")
@@ -77,6 +77,9 @@ except Exception as error:
 automatic = detect_tab(frame)
 layout = st.radio("Tab movement", ["Horizontal scrolling", "Changing pages / rows"], horizontal=True)
 st.caption("Choose Changing pages / rows when the video replaces a whole tab row instead of sliding it sideways.")
+part_choice = st.selectbox("Guitar parts", ["Upper part only", "Both parts / all visible tabs"],
+                           help="When two guitar parts are stacked, choose the upper part or keep both together in time. A paired system counts as one PDF row.")
+part = 'upper' if part_choice == 'Upper part only' else 'all'
 crop_mode = st.radio("Capture area", ["Automatic detection", "Fixed crop"], horizontal=True)
 region = None
 if crop_mode == "Fixed crop":
@@ -94,7 +97,7 @@ if box:
 a, b = st.columns(2)
 a.image(annotated, channels="BGR", caption="Green border: capture area", use_container_width=True)
 if box:
-    b.image(crop_frame(frame, box), channels="BGR", caption="Capture preview", use_container_width=True)
+    b.image(select_tab_part(crop_frame(frame, box), part), channels="BGR", caption="Selected part preview", use_container_width=True)
 else:
     b.warning("No six-line tab system detected. Try another time or use Fixed crop.")
 
@@ -105,6 +108,8 @@ with st.expander("Extraction settings", expanded=True):
     paper = c.selectbox("PDF paper size", ["A4", "Letter"])
     bars_per_line = st.number_input("Bars per line", min_value=2, max_value=8, value=4,
                                     help="Wrap scrolling tablature at detected measure boundaries.")
+    rows_per_page = st.number_input("Tab rows per page", min_value=1, max_value=10, value=5,
+                                    help="Five rows per page by default. The last page can have fewer rows. If both parts are selected, the aligned pair counts as one row.")
     a, b = st.columns(2)
     start = a.number_input("Start (seconds)", 0., float(info["duration"]), 0.)
     end = b.number_input("End (seconds)", 0., float(info["duration"]), float(info["duration"]))
@@ -113,10 +118,10 @@ with st.expander("Extraction settings", expanded=True):
 if st.button("Extract tabs", type="primary"):
     bar = st.progress(0., text="Finding tab frames...")
     try:
-        capture_region = (region or automatic) if layout == "Horizontal scrolling" else region
-        if layout == "Horizontal scrolling" and capture_region is None:
+        capture_region = region
+        if layout == "Horizontal scrolling" and region is None and automatic is None:
             raise ValueError("Choose a preview with visible tabs or set a fixed crop before stitching.")
-        captures, missed, total = extract(path, interval, capture_region, threshold, start, end, bar.progress)
+        captures, missed, total = extract(path, interval, capture_region, threshold, start, end, bar.progress, part=part)
         st.session_state.stitch_stats = {}
         if layout == "Horizontal scrolling":
             bar.progress(1., text="Joining scrolling sections...")
@@ -127,7 +132,7 @@ if st.button("Extract tabs", type="primary"):
         st.session_state.selected = {}
         st.session_state.review_revision = st.session_state.get("review_revision", 0) + 1
         st.session_state.report = f"{len(captures)} captures from {total} samples; {missed} samples unreadable or without detected tabs."
-        st.session_state.settings = (interval, region, threshold, start, end, layout, bars_per_line)
+        st.session_state.settings = (interval, region, threshold, start, end, layout, bars_per_line, part)
     except Exception as error:
         st.error(str(error))
     finally:
@@ -143,14 +148,14 @@ st.subheader("3 · Review and export")
 if box and st.button("Add current preview as a manual capture"):
     previous_selection = {id(cap): st.session_state.selected.get(i, True)
                           for i, cap in enumerate(st.session_state.captures)}
-    st.session_state.captures.append(Capture(preview_time, crop_frame(frame, box)))
+    st.session_state.captures.append(Capture(preview_time, select_tab_part(crop_frame(frame, box), part)))
     st.session_state.captures.sort(key=lambda x: x.time)
     st.session_state.selected = {i: previous_selection.get(id(cap), True)
                                 for i, cap in enumerate(st.session_state.captures)}
     st.session_state.review_revision = st.session_state.get("review_revision", 0) + 1
 captures = st.session_state.get("captures", [])
 if captures:
-    if st.session_state.get("settings") and st.session_state.settings != (interval, region, threshold, start, end, layout, bars_per_line):
+    if st.session_state.get("settings") and st.session_state.settings != (interval, region, threshold, start, end, layout, bars_per_line, part):
         st.warning("Settings changed. Extract again to apply them to existing captures.")
     st.write("Uncheck unwanted captures. Check for missing sections and partially visible notes before printing.")
     revision = st.session_state.get("review_revision", 0)
@@ -166,7 +171,7 @@ if captures:
     selected = [cap for i, cap in enumerate(captures) if st.session_state.selected.get(i, True)]
     st.caption(f"{len(selected)} of {len(captures)} captures selected")
     if selected:
-        pdf = make_pdf(selected, title or "Guitar tablature", st.session_state.source, paper, monochrome)
+        pdf = make_pdf(selected, title or "Guitar tablature", st.session_state.source, paper, monochrome, rows_per_page=rows_per_page)
         st.download_button("Download complete PDF", pdf, "guitar-tabs.pdf", "application/pdf", type="primary")
     else:
         st.warning("Select at least one capture to export.")

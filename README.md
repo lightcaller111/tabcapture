@@ -27,10 +27,10 @@ python -m streamlit run app.py --server.address 127.0.0.1 --server.maxUploadSize
 ## Use
 
 1. Load a YouTube URL or upload a video. Playlist parameters are ignored; only the chosen video is downloaded.
-2. Choose Horizontal scrolling or Changing pages / rows. Pick a preview time with visible tabs. Inspect the automatic capture border. Use Fixed crop and adjust the edges if detection misses notes, chords, or rhythm marks.
+2. Choose Horizontal scrolling or Changing pages / rows. Choose Guitar parts: Upper part only (default) or Both parts / all visible tabs. Pick a preview time with visible tabs and inspect the selected-part preview. Automatic detection follows layout changes; a fixed crop remains the region you specify, so include both parts if you want both when they appear later.
 3. Set the time range and sampling interval. One second is a starting point; use 0.2-0.5 seconds for faster changes. Lower duplicate tolerance preserves smaller note changes.
 4. Extract and review the captures. Uncheck unwanted images. Add a manual capture from the preview if a section was missed.
-5. Download the PDF. Scrolling tabs default to four detected bars per line, connected at barlines, with smaller notation, measure numbers, and a clean white background. Change Bars per line before extracting to adjust the layout. Captures stay in chronological order on A4 or Letter pages, with a source link.
+5. Download the PDF. Defaults are four detected bars per row and five tab rows per page, with a clean white background. The last page can have fewer rows. An aligned pair of guitar parts counts as one row when both parts are selected. Change Bars per line or Guitar parts before extracting again. Tab rows per page changes the PDF directly. Captures stay in chronological order on A4 or Letter pages, with a source link.
 
 ## Limitations
 

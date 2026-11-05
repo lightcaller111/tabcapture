@@ -1,5 +1,13 @@
 # Release notes
 
+## 1.5.0
+- Default to five tab rows per PDF page, adjustable from one to ten.
+- Add a guitar-part selector, defaulting to upper part only; preview and manual captures use the selection too.
+- Re-detect automatic crop areas throughout the video when the notation layout changes.
+- Separate single-part and stacked-part scrolling sections rather than joining incompatible layouts.
+- Identify short fragments by width rather than height, avoiding accidental miniaturization of stacked parts.
+- Normalize single-part staff size and allow different viewport widths when matching overlapping scrolling captures; uncertain notation reflows remain separate.
+
 ## 1.4.0
 - Fit normal tab rows to the printable page width independently, with narrower margins.
 - Trim empty vertical padding and balance row spacing on full pages.

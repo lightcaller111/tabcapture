@@ -18,6 +18,44 @@ def tab(note="3"):
     return frame
 
 class CoreTests(unittest.TestCase):
+    def test_scroll_overlap_with_different_window_widths(self):
+        from core import scroll_offset
+        rng = np.random.default_rng(123)
+        strip = rng.integers(0,256,(100,1800,3),dtype=np.uint8)
+        self.assertEqual(scroll_offset(strip[:,:1000],strip[:,300:1500]),300)
+        self.assertEqual(scroll_offset(strip[:,300:1300],strip[:,:1500]),-300)
+
+    def test_upper_part_selection_preserves_rhythm(self):
+        from core import tab_system_rows, select_tab_part
+        frame = np.full((320,1000,3),255,np.uint8)
+        for top in (65,205):
+            for y in range(top,top+51,10):
+                cv2.line(frame,(10,y),(990,y),(0,0,0),1)
+        cv2.line(frame,(200,100),(200,155),(0,0,0),2)
+        systems = tab_system_rows(frame)
+        self.assertEqual(len(systems),2)
+        upper = select_tab_part(frame,'upper')
+        self.assertGreater(upper.shape[0],155)
+        self.assertLess(upper.shape[0],205)
+        self.assertEqual(len(tab_system_rows(upper)),1)
+        self.assertTrue(np.array_equal(select_tab_part(frame,'all'),frame))
+
+    def test_five_rows_per_pdf_page(self):
+        from unittest.mock import patch
+        from reportlab.pdfgen.canvas import Canvas
+        per_page, current = [], []
+        original_image, original_page = Canvas.drawImage, Canvas.showPage
+        def image(canvas,*args,**kwargs):
+            current.append(args)
+            return original_image(canvas,*args,**kwargs)
+        def page(canvas,*args,**kwargs):
+            per_page.append(len(current))
+            current.clear()
+            return original_page(canvas,*args,**kwargs)
+        with patch.object(Canvas,'drawImage',image), patch.object(Canvas,'showPage',page):
+            make_pdf([Capture(i,tab()) for i in range(12)])
+        self.assertEqual(per_page,[5,5,2])
+
     def test_pdf_rows_fill_width_without_enlarging_short_tail(self):
         from unittest.mock import patch
         from reportlab.pdfgen.canvas import Canvas

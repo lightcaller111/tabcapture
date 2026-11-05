@@ -26,6 +26,8 @@ class AppTests(unittest.TestCase):
             app.run()
             self.assertEqual(len(app.exception),0)
             next(r for r in app.radio if r.label=="Tab movement").set_value("Changing pages / rows").run()
+            self.assertEqual(next(n for n in app.number_input if n.label=='Tab rows per page').value,5)
+            self.assertEqual(next(s for s in app.selectbox if s.label=='Guitar parts').value,'Upper part only')
             next(b for b in app.button if b.label=="Extract tabs").click().run()
             self.assertEqual(len(app.exception),0)
             self.assertEqual(len(app.session_state["captures"]),3)
