@@ -18,6 +18,47 @@ def tab(note="3"):
     return frame
 
 class CoreTests(unittest.TestCase):
+    def test_reflow_matches_ordered_bars_without_duplicating_overlap(self):
+        from core import matching_bar_boundary, stitch_scroll
+        rng = np.random.default_rng(56)
+        symbols = [rng.integers(0,2,(30,65),dtype=np.uint8)*255 for _ in range(5)]
+        def score(boundaries, identities, width):
+            image = np.full((200,width,3),255,np.uint8)
+            for y in range(50,151,20):
+                cv2.line(image,(0,y),(width-1,y),(90,90,90),1)
+            for x, identity in zip(boundaries,identities):
+                cv2.line(image,(x,50),(x,150),(0,0,0),1)
+                image[8:38,x+3:x+68] = symbols[identity][:,:,None]
+            return image
+        old = score([250,500,750],[0,1,2],1000)
+        new = score([180,580,1080,1380],[0,1,2,3],1500)
+        self.assertEqual(matching_bar_boundary(old,new),(750,1080))
+        stats = {}
+        rows = stitch_scroll([Capture(0,old),Capture(1,new)],minimum_match=.99,stats=stats)
+        self.assertEqual(stats['breaks'],0)
+        self.assertEqual(stats['reflow_joins'],1)
+        self.assertEqual(sum(r.image.shape[1] for r in rows)-(len(rows)-1),1170)
+        unrelated = score([180,580,1080],[4,4,4],1500)
+        self.assertIsNone(matching_bar_boundary(old,unrelated))
+
+    def test_terminal_barline_attaches_but_a_note_does_not(self):
+        from core import attach_terminal_barline
+        image = np.full((200,1000,3),255,np.uint8)
+        tail = np.full((200,20,3),255,np.uint8)
+        for y in range(50,151,20):
+            cv2.line(image,(0,y),(999,y),(0,0,0),1)
+            cv2.line(tail,(0,y),(19,y),(0,0,0),1)
+        cv2.line(tail,(12,50),(12,150),(0,0,0),1)
+        cv2.line(tail,(18,50),(18,150),(0,0,0),3)
+        rows = [Capture(i,image.copy(),i*4+1) for i in range(5)] + [Capture(5,tail,21)]
+        joined = attach_terminal_barline(rows)
+        self.assertEqual(len(joined),5)
+        self.assertEqual(joined[-1].image.shape[1],1020)
+        self.assertTrue(np.array_equal(joined[-1].image[:,-20:],tail))
+        note = tail.copy()
+        cv2.putText(note,'5',(0,95),cv2.FONT_HERSHEY_SIMPLEX,.6,(0,0,0),2)
+        self.assertEqual(len(attach_terminal_barline(rows[:-1]+[Capture(5,note)])),6)
+
     def test_scroll_overlap_with_different_window_widths(self):
         from core import scroll_offset
         rng = np.random.default_rng(123)
@@ -62,9 +103,11 @@ class CoreTests(unittest.TestCase):
         from reportlab.lib.pagesizes import A4
         rows = []
         for width in (1200,1600,2000,300):
-            image = np.full((200,width,3),255,np.uint8)
+            image = np.full((400 if width == 1200 else 200,width,3),255,np.uint8)
             for y in range(50,151,20):
                 cv2.line(image,(0,y),(width-1,y),(0,0,0),1)
+            if width == 1200:
+                cv2.line(image,(100,20),(100,380),(0,0,0),2)
             rows.append(Capture(0,image))
         original = Canvas.drawImage
         with patch.object(Canvas, 'drawImage', autospec=True, side_effect=original) as draw:

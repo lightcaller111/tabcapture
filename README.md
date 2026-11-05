@@ -35,7 +35,7 @@ python -m streamlit run app.py --server.address 127.0.0.1 --server.maxUploadSize
 ## Limitations
 
 - Captures images of notation; it does not transcribe audio or produce editable music notation.
-- Supports stationary page/row changes and horizontal scrolling. Scrolling mode matches overlapping frames, assembles strips, and splits them near barlines or whitespace with a small overlap. Uncertain matches start a new strip. Vertical scrolling is not stitched. Review for duplicated or missing sections, especially with repeated patterns, jumps, and rapid motion.
+- Supports stationary page/row changes and horizontal scrolling. Scrolling mode matches overlapping frames and checks multiple ordered bar boundaries when measure spacing changes. It assembles a continuous strip before wrapping at barlines, and attaches an isolated closing barline to the preceding music. Uncertain matches still start a new strip. Vertical scrolling is not stitched. Review for duplicated or missing sections, especially with repeated patterns, jumps, and rapid motion.
 - Six-line detection is a visual heuristic. Other string counts, five-line staff notation alone, low contrast, overlays, and moving backgrounds may require Fixed crop.
 - Duplicate removal can retain cursor changes or merge small note changes. Sampled frames cannot guarantee every note is captured. Review before printing.
 - Downloads prefer H.264 video up to 1080p for fast decoding. Source quality limits PDF sharpness.

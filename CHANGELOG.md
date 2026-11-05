@@ -1,5 +1,12 @@
 # Release notes
 
+## 1.6.0
+- Match consecutive bar boundaries when the video changes measure spacing, preserving one continuous strip before wrapping into four-bar rows.
+- Avoid needless horizontal resizing caused by tiny staff-detection variations.
+- Retain a captured final double barline on the preceding music row instead of giving it a separate row or page.
+- Fill the printable width for complete rows even when tall notation needs a separate height fit.
+- Keep five rows per page and upper guitar part as the defaults.
+
 ## 1.5.0
 - Default to five tab rows per PDF page, adjustable from one to ten.
 - Add a guitar-part selector, defaulting to upper part only; preview and manual captures use the selection too.

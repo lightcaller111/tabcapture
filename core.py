@@ -375,8 +375,10 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
         if iw < typical_width * .55:
             target_width *= iw / typical_width
         slot_height = (height - 60 - margin) / rows_per_page
-        scale = min(target_width / iw, (slot_height - 24) / ih)
-        laid_out.append((capture, image, iw * scale, ih * scale))
+        draw_height = min(ih * target_width / iw, slot_height - 24)
+        # Tall bends/rhythm marks must not pull a complete row away from the
+        # right margin. Fit its height separately within the chosen page grid.
+        laid_out.append((capture, image, target_width, draw_height))
     def new_page():
         nonlocal page
         if page:
@@ -518,6 +520,10 @@ def normalize_scroll_staff(captures):
             result.append(cap)
             continue
         factor = target_gap / float(np.mean(np.diff(parts[0])))
+        # A one-pixel line-detection wobble is not a camera zoom. Rescaling
+        # those frames changes every horizontal note coordinate unnecessarily.
+        if abs(factor - 1) < .04:
+            factor = 1.
         source = cv2.resize(cap.image, (round(cap.image.shape[1]*factor),round(cap.image.shape[0]*factor)), interpolation=cv2.INTER_CUBIC)
         background = 0 if dark_paper(cap.image) else 255
         normalized = np.full((height,source.shape[1],3),background,np.uint8)
@@ -530,10 +536,99 @@ def normalize_scroll_staff(captures):
     return result
 
 
+def matching_bar_boundary(previous, current):
+    """Recover a notation reflow using several ordered, distinctive bar starts.
+
+    Compare local notation rather than stretching a whole measure: the video
+    can change beat spacing while retaining the size of the printed symbols.
+    Only adjacent video captures are considered, never global repeated music.
+    """
+    if previous.shape[0] != current.shape[0]:
+        return None
+    old, new = barline_positions(previous), barline_positions(current)
+    if len(old) < 2 or len(new) < 2:
+        return None
+    systems = tab_system_rows(previous)
+    if len(systems) != 1:
+        return None
+    gap = float(np.mean(np.diff(systems[0])))
+    left, right = round(gap * 1.3), round(gap * 3.4)
+    a, b = print_image(previous), print_image(current)
+    # Antialiasing can move a detected thin string by a pixel. Permit a tiny
+    # vertical registration correction as well as the horizontal one.
+    b = cv2.copyMakeBorder(b, 3, 3, 0, 0, cv2.BORDER_CONSTANT, value=255)
+    scores = np.zeros((len(old), len(new)), np.float32)
+    for i, x in enumerate(old):
+        available_right = min(right, a.shape[1] - x - 4)
+        if x < left or available_right < gap * 1.5:
+            continue
+        patch = a[:, x-left:x+available_right]
+        # Empty staff/bar intersections provide no musical identity.
+        ink = cv2.threshold(patch, 140, 255, cv2.THRESH_BINARY_INV)[1]
+        horizontal = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((1, 20), np.uint8))
+        vertical = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((20, 1), np.uint8))
+        if np.count_nonzero(cv2.subtract(ink, cv2.bitwise_or(horizontal, vertical))) < 60:
+            continue
+        for j, y in enumerate(new):
+            if y < left + 3 or y + available_right + 3 >= b.shape[1]:
+                continue
+            search = b[:, y-left-3:y+available_right+3]
+            scores[i, j] = cv2.minMaxLoc(cv2.matchTemplate(search, patch, cv2.TM_CCOEFF_NORMED))[1]
+    candidates = []
+    for delta in range(-len(new)+1, len(old)):
+        pairs = []
+        for j in range(len(new)):
+            i = j + delta
+            if not 0 <= i < len(old):
+                continue
+            score = float(scores[i, j])
+            alternatives = [float(scores[i, k]) for k in range(len(new)) if k != j]
+            if score >= .60 and score - max(alternatives, default=0) >= .08:
+                pairs.append((i, j, score))
+        if len(pairs) >= 2 and max(p[2] for p in pairs) >= .78:
+            candidates.append((sum(p[2] for p in pairs), pairs))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < .4:
+        return None
+    i, j, _ = candidates[0][1][-1]
+    return old[i], new[j]
+
+
+def attach_terminal_barline(rows):
+    """Keep a captured closing stroke with the music, without dropping notes."""
+    if len(rows) < 2:
+        return rows
+    previous, tail = rows[-2], rows[-1]
+    if previous.image.shape[0] != tail.image.shape[0]:
+        return rows
+    systems = tab_system_rows(previous.image)
+    if len(systems) != 1:
+        return rows
+    staff = systems[0]
+    gap = float(np.mean(np.diff(staff)))
+    if tail.image.shape[1] > gap * 3:
+        return rows
+    ink = cv2.threshold(print_image(tail.image), 140, 255, cv2.THRESH_BINARY_INV)[1]
+    for y in staff:
+        ink[max(0,y-2):y+3] = 0
+    vertical = cv2.morphologyEx(
+        cv2.threshold(print_image(tail.image), 140, 255, cv2.THRESH_BINARY_INV)[1],
+        cv2.MORPH_OPEN, np.ones((max(10, round(gap*4)), 1), np.uint8))
+    if not np.any(vertical):
+        return rows
+    remaining = cv2.subtract(ink, cv2.dilate(vertical, np.ones((3,3),np.uint8)))
+    if np.count_nonzero(remaining) > 12:
+        return rows
+    joined = np.concatenate([previous.image, tail.image], axis=1)
+    return rows[:-2] + [Capture(previous.time, joined, previous.bar_number)]
+
+
 def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
     """Join overlapping left-moving tab windows; split the strip into print rows."""
     if stats is not None:
-        stats.update(joins=0, breaks=0, break_times=[], layout_changes=0)
+        stats.update(joins=0, breaks=0, break_times=[], layout_changes=0, reflow_joins=0)
     if not captures:
         return []
     captures = normalize_scroll_staff(captures)
@@ -631,6 +726,20 @@ def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
                 # slow scrolling silently loses pixels at every sample.
                 continue
         else:
+            boundary = matching_bar_boundary(previous, current)
+            if boundary is not None:
+                old_x, new_x = boundary
+                cut = total_width - previous.shape[1] + old_x
+                strip = np.concatenate(chunks, axis=1)
+                chunks = [strip[:, :cut].copy(), current[:, new_x:].copy()]
+                positions = [(x, t) for x, t in positions if x < cut] + [(cut, capture.time)]
+                total_width = cut + current.shape[1] - new_x
+                previous = current
+                previous_parts = current_parts
+                if stats is not None:
+                    stats['joins'] += 1
+                    stats['reflow_joins'] += 1
+                continue
             if stats is not None:
                 stats['breaks'] += 1
                 stats['break_times'].append(capture.time)
@@ -641,4 +750,4 @@ def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
         previous = current
         previous_parts = current_parts
     finish()
-    return rows
+    return attach_terminal_barline(rows)
