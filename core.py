@@ -376,6 +376,8 @@ def scroll_offset(previous, current, minimum_match=.78):
 def barline_positions(strip):
     """Find strokes crossing all six strings, excluding note stems below them."""
     gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+    if dark_paper(strip):
+        gray = print_image(strip)
     sample = gray[:, :min(gray.shape[1], 6000)]
     mask = cv2.adaptiveThreshold(sample, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                  cv2.THRESH_BINARY_INV, 31, 9)
@@ -384,25 +386,41 @@ def barline_positions(strip):
     groups = np.split(ys, np.where(np.diff(ys) > 2)[0] + 1)
     lines = [int(np.mean(g)) for g in groups if len(g)]
     system = None
-    for i in range(len(lines) - 5):
-        run = lines[i:i+6]
-        gaps = np.diff(run)
-        if np.median(gaps) >= 4 and max(abs(gaps - np.median(gaps))) <= 2:
-            system = run
+    for i, first in enumerate(lines):
+        for last in lines[i + 5:]:
+            gap = (last - first) / 5
+            if not 4 <= gap <= 80:
+                continue
+            run = [min(lines, key=lambda y: abs(y - (first + n * gap))) for n in range(6)]
+            if len(set(run)) == 6 and all(abs(y - (first + n * gap)) <= 2 for n, y in enumerate(run)):
+                system = run
+                break
+        if system is not None:
             break
     if system is None:
         return []
     top, bottom = system[0] + 1, system[-1] - 1
     band = cv2.threshold(gray[top:bottom+1], 125, 255, cv2.THRESH_BINARY_INV)[1]
-    if np.median(gray) < 115:
-        band = cv2.threshold(gray[top:bottom+1], 125, 255, cv2.THRESH_BINARY)[1]
     # A barline reaches the top string. High-note stems stop just below it;
     # permitting even a short gap incorrectly counts those stems as measures.
     xs = np.flatnonzero((band > 0).mean(axis=0) >= .98)
     # Merge nearby repeat strokes / arpeggio strokes with the true barline.
     join_distance = max(12, int(np.median(np.diff(system)) * 2.5))
     groups = np.split(xs, np.where(np.diff(xs) > join_distance)[0] + 1)
-    return [int(g[0]) for g in groups if len(g) and g[0] > 12]
+    staff_pixels = np.flatnonzero((horizontal[system[0]:system[-1]+1] > 0).any(axis=0))
+    left_edge = int(staff_pixels[0]) if len(staff_pixels) else 0
+    # The opening staff border is not a completed measure.
+    return [int(g[0]) for g in groups if len(g) and g[0] > left_edge + max(12, int(np.median(np.diff(system)) * .6))]
+
+
+def reflow_pages(captures, bars_per_line=4):
+    """Wrap each stationary tab row at measures, never treating it as a scroll."""
+    result = []
+    for capture in captures:
+        for row in stitch_scroll([capture], bars_per_line=bars_per_line):
+            row.bar_number = None
+            result.append(row)
+    return result
 
 
 def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
@@ -438,6 +456,11 @@ def stitch_scroll(captures, minimum_match=.78, stats=None, bars_per_line=4):
             if length - start > 1:
                 rows.append(Capture(positions[-1][1], strip[:, start:].copy(), next_bar))
                 next_bar += 1
+            return
+        if len(chunks) == 1:
+            # A stationary row without reliable measure boundaries must stay
+            # intact; arbitrary pixel slicing can cut through notes and bars.
+            rows.append(Capture(positions[0][1], strip.copy()))
             return
         width = min(chunks[0].shape[1], 1280)
         start = 0

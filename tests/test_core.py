@@ -18,6 +18,28 @@ def tab(note="3"):
     return frame
 
 class CoreTests(unittest.TestCase):
+    def test_dark_four_bar_row_stays_whole(self):
+        from core import barline_positions, reflow_pages
+        frame = np.zeros((276, 1815, 3), np.uint8)
+        for y in range(85, 186, 20):
+            cv2.line(frame, (36, y), (1772, y), (220,220,220), 1)
+        for x in (36,470,904,1338,1772):
+            cv2.line(frame, (x,85), (x,185), (230,230,230), 2)
+        cv2.line(frame, (100,92), (600,92), (230,230,230), 1)
+        self.assertEqual(len(barline_positions(frame)), 4)
+        four = reflow_pages([Capture(0,frame)], 4)
+        self.assertEqual(len(four), 1)
+        self.assertEqual(four[0].image.shape, frame.shape)
+        self.assertEqual(len(reflow_pages([Capture(0,frame)], 2)), 2)
+
+    def test_unrecognized_stationary_row_not_cut(self):
+        from core import reflow_pages
+        frame = np.full((180,1815,3), 255, np.uint8)
+        cv2.putText(frame, 'Uncertain notation', (50,80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
+        rows = reflow_pages([Capture(0,frame)], 4)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(np.array_equal(rows[0].image,frame))
+
     def test_light_staff_with_extra_tie_line(self):
         from core import print_image
         frame = 255 - tab()

@@ -1,5 +1,10 @@
 # Release notes
 
+## 1.3.1
+- Fixed dark-panel barline detection and excluded opening staff borders from measure counts.
+- Applied Bars per line to changing rows as well as scrolling tabs.
+- Preserved stationary rows when measure detection is uncertain instead of slicing through notes at a fixed pixel width.
+
 ## 1.3.0
 - Empty URL field with the placeholder Enter the URL.
 - Detect light staff lines on dark backgrounds even when ties add extra horizontal lines.

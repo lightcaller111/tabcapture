@@ -3,6 +3,7 @@ import tempfile
 import cv2
 import streamlit as st
 from version import __version__
+from core import reflow_pages
 from core import download_video, video_info, frame_at, detect_tab, crop_frame, extract, make_pdf, timestamp, Capture, youtube_url, stitch_scroll
 
 st.set_page_config(page_title="TabCapture", page_icon="🎸", layout="wide")
@@ -120,6 +121,8 @@ if st.button("Extract tabs", type="primary"):
         if layout == "Horizontal scrolling":
             bar.progress(1., text="Joining scrolling sections...")
             captures = stitch_scroll(captures, stats=st.session_state.stitch_stats, bars_per_line=bars_per_line)
+        else:
+            captures = reflow_pages(captures, bars_per_line=bars_per_line)
         st.session_state.captures = captures
         st.session_state.selected = {}
         st.session_state.review_revision = st.session_state.get("review_revision", 0) + 1
