@@ -24,6 +24,8 @@ class Capture:
     time: float
     image: np.ndarray
     bar_number: int | None = None
+    bar_count: int | None = None
+    row_capacity: int | None = None
 
 
 def youtube_url(value):
@@ -154,15 +156,24 @@ def detect_tab(frame):
                     continue
                 if staff_contrast(polarity, horizontal, run, gap) < 12:
                     continue
-                points = np.where(horizontal[max(0, run[0] - 1):run[-1] + 2] > 0)[1]
-                if len(points):
-                    systems.append((int(points.min()), run[0], int(points.max()), run[-1], gap))
+                # A nearby chord diagram can contain horizontal lines too.
+                # Require the same horizontal span on most of the six strings.
+                support = sum((horizontal[max(0,y-1):y+2] > 0).any(axis=0).astype(np.uint8) for y in run)
+                spans = (support >= 4).astype(np.uint8)[None, :]
+                spans = cv2.morphologyEx(spans, cv2.MORPH_CLOSE, np.ones((1,max(3,round(gap*2.5))),np.uint8))[0]
+                points = np.flatnonzero(spans)
+                runs = np.split(points, np.where(np.diff(points)>1)[0]+1)
+                runs = [r for r in runs if len(r) >= gray.shape[1]*.22]
+                if runs:
+                    span = max(runs,key=len)
+                    systems.append((int(span[0]), run[0], int(span[-1]), run[-1], gap))
     if not systems:
         return None
     gap = max(s[4] for s in systems)
     x1 = max(0, min(s[0] for s in systems) - 25)
     x2 = min(gray.shape[1], max(s[2] for s in systems) + 26)
-    y1 = max(0, int(min(s[1] for s in systems) - gap * 4))
+    annotation_margin = 7.5 if np.median(gray[int(min(s[1] for s in systems)):int(max(s[3] for s in systems)), x1:x2]) < 115 else 4
+    y1 = max(0, int(min(s[1] for s in systems) - gap * annotation_margin))
     y2 = min(gray.shape[0], int(max(s[3] for s in systems) + gap * 4.5))
     # The desired annotation margin can extend into the performance video.
     # Stop at an unmistakable full-width white-panel edge, when present,
@@ -366,11 +377,17 @@ def print_image(image):
     return (255 * np.clip(gray.astype(float) / white, 0, 1) ** 1.25).astype(np.uint8)
 
 
-def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochrome=True, show_timestamps=False, rows_per_page=5):
+def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochrome=True, show_timestamps=False, rows_per_page=5, max_pages=None):
     if not captures:
         raise ValueError('Select at least one capture before exporting.')
     if not isinstance(rows_per_page, int) or not 1 <= rows_per_page <= 10:
         raise ValueError('Choose between 1 and 10 tab rows per page.')
+    if max_pages is not None:
+        if not isinstance(max_pages, int) or max_pages < 1:
+            raise ValueError('Page limit must be a positive whole number.')
+        rows_per_page = max(rows_per_page, math.ceil(len(captures) / max_pages))
+        if rows_per_page > 24:
+            raise ValueError('This video has too many rows for a readable PDF at this page limit. Increase the page limit; no rows were removed.')
     buffer = BytesIO()
     size = A4 if paper == 'A4' else letter
     doc = canvas.Canvas(buffer, pagesize=size)
@@ -403,10 +420,13 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
         # Fit ordinary rows independently, so a very wide stitched strip cannot
         # shrink every other row. Retain the size of genuinely short fragments.
         target_width = width - 2 * margin
-        if iw < typical_width * .55:
+        if capture.bar_count is not None and capture.row_capacity:
+            target_width *= capture.bar_count / capture.row_capacity
+        elif iw < typical_width * .55:
             target_width *= iw / typical_width
         slot_height = (height - 60 - margin) / rows_per_page
-        draw_height = min(ih * target_width / iw, slot_height - 24)
+        vertical_scale = (width - 2 * margin) / typical_width if capture.bar_count is not None else target_width / iw
+        draw_height = min(ih * vertical_scale * (1.4 if max_pages else 1.), slot_height - 24)
         # Tall bends/rhythm marks must not pull a complete row away from the
         # right margin. Fit its height separately within the chosen page grid.
         laid_out.append((capture, image, target_width, draw_height))
@@ -437,12 +457,21 @@ def make_pdf(captures, title='Guitar tablature', source='', paper='A4', monochro
         used += needed
     if pending:
         pages.append(pending)
+    if max_pages is not None:
+        # Balance the page counts so the last page is not unnecessarily sparse.
+        count = math.ceil(len(laid_out)/rows_per_page)
+        base, extra = divmod(len(laid_out),count)
+        pages, offset = [], 0
+        for i in range(count):
+            length = base + (i < extra)
+            pages.append(laid_out[offset:offset+length])
+            offset += length
     for page_index, rows in enumerate(pages):
         y = new_page()
         # Balance full pages down to the bottom margin; leave the last partial
         # page naturally spaced instead of stretching a few rows vertically.
         extra = max(0, available - sum(row[3] + 24 for row in rows))
-        gap = 12 + (extra / (len(rows) - 1) if len(rows) == rows_per_page and len(rows) > 1 else 0)
+        gap = 12 + (extra / (len(rows) - 1) if (max_pages is not None or len(rows) == rows_per_page) and len(rows) > 1 else 0)
         for capture, image, draw_w, draw_h in rows:
             doc.setFont('Helvetica', 7)
             doc.setFillColorRGB(.35, .39, .44)
@@ -522,13 +551,73 @@ def barline_positions(strip):
     return [int(g[0]) for g in groups if len(g) and g[0] > left_edge + max(12, int(np.median(np.diff(system)) * .6))]
 
 
-def reflow_pages(captures, bars_per_line=4):
-    """Wrap each stationary tab row at measures, never treating it as a scroll."""
-    result = []
-    for capture in captures:
-        for row in stitch_scroll([capture], bars_per_line=bars_per_line):
-            row.bar_number = None
-            result.append(row)
+def reflow_pages(captures, bars_per_line=4, stats=None):
+    """Pack consecutive stationary panels without removing repeated music.
+
+    Unknown boundaries remain intact and interrupt packing, rather than
+    pretending an incomplete fragment is a complete measure.
+    """
+    if not 1 <= bars_per_line <= 8:
+        raise ValueError('Choose between 1 and 8 bars per line.')
+    if stats is not None:
+        stats.update(uncertain_times=[], panels=len(captures), measures=0)
+    result, pending = [], []
+    number = 1
+
+    def flush():
+        nonlocal pending, number
+        if not pending:
+            return
+        # Align using staff positions, retaining all annotation padding.
+        gap = float(np.median([item[2] for item in pending]))
+        scaled = []
+        for pixels, top, old_gap, time in pending:
+            scale = gap / old_gap
+            image = cv2.resize(pixels, (max(1, round(pixels.shape[1]*scale)),
+                                      max(1, round(pixels.shape[0]*scale))))
+            scaled.append((image, round(top*scale), time))
+        above = max(top for image, top, time in scaled)
+        below = max(len(image)-top for image, top, time in scaled)
+        row = np.full((above+below, sum(image.shape[1] for image, _, _ in scaled), 3), 255, np.uint8)
+        x = 0
+        for image, top, time in scaled:
+            y = above-top
+            row[y:y+len(image), x:x+image.shape[1]] = image
+            x += image.shape[1]
+        result.append(Capture(pending[0][3], row, number, len(pending), bars_per_line))
+        number += len(pending)
+        pending = []
+
+    for cap in captures:
+        pixels = cv2.cvtColor(print_image(cap.image), cv2.COLOR_GRAY2BGR)
+        systems = tab_system_rows(cap.image)
+        boundaries = barline_positions(cap.image)
+        # Only pack complete single systems. Preserve paired/unclear panels.
+        if len(systems) != 1 or not boundaries:
+            flush()
+            result.append(Capture(cap.time, cap.image.copy()))
+            if stats is not None:
+                stats['uncertain_times'].append(cap.time)
+            continue
+        top, bottom = systems[0][0], systems[0][-1]
+        gap = (bottom-top)/5
+        # Do not discard an unclosed tail: keep the entire panel for review.
+        if pixels.shape[1]-boundaries[-1] > max(50, gap*3):
+            flush()
+            result.append(Capture(cap.time, cap.image.copy()))
+            if stats is not None:
+                stats['uncertain_times'].append(cap.time)
+            continue
+        left = 0
+        for j, boundary in enumerate(boundaries):
+            right = pixels.shape[1] if j == len(boundaries)-1 else boundary+2
+            pending.append((pixels[:, left:right].copy(), top, gap, cap.time))
+            if stats is not None:
+                stats['measures'] += 1
+            left = right
+            if len(pending) == bars_per_line:
+                flush()
+    flush()
     return result
 
 

@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.7.0
+- Combine consecutive stationary panels into four-bar rows, retaining repeated sections in order.
+- Default to a six-page PDF limit; fit all rows instead of dropping content. Keep timestamps in exports.
+- Preserve unclear panels intact and report their times for review.
+- Sample every 0.2 seconds by default, keeping the adjustable change sensitivity.
+- Exclude adjacent chord-fingering diagrams from automatic tab crops.
+- Include higher chord names and palm-muting annotations on dark tab panels.
+- Retain the five-row setting when the page limit is disabled.
+
+
 ## 1.6.1
 - Detect strings interrupted by dense chord numbers, avoiding missing captures and false changes in guitar-part count.
 - Reject opposite-polarity halos when locating string lines, keeping captures aligned.

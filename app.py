@@ -75,7 +75,7 @@ except Exception as error:
     st.error(str(error))
     st.stop()
 automatic = detect_tab(frame)
-layout = st.radio("Tab movement", ["Horizontal scrolling", "Changing pages / rows"], horizontal=True)
+layout = st.radio("Tab movement", ["Horizontal scrolling", "Changing pages / rows"], index=1, horizontal=True)
 st.caption("Choose Changing pages / rows when the video replaces a whole tab row instead of sliding it sideways.")
 part_choice = st.selectbox("Guitar parts", ["Upper part only", "Both parts / all visible tabs"],
                            help="When two guitar parts are stacked, choose the upper part or keep both together in time. A paired system counts as one PDF row.")
@@ -103,13 +103,16 @@ else:
 
 with st.expander("Extraction settings", expanded=True):
     a, b, c = st.columns(3)
-    interval = a.number_input("Sample every (seconds)", .2, 30., 1., .2)
+    interval = a.number_input("Sample every (seconds)", .1, 30., .2, .1)
     threshold = b.slider("Duplicate tolerance", .01, .60, .15, .01, help="Lower values retain smaller note changes but can also retain cursor movement.")
     paper = c.selectbox("PDF paper size", ["A4", "Letter"])
     bars_per_line = st.number_input("Bars per line", min_value=2, max_value=8, value=4,
-                                    help="Wrap scrolling tablature at detected measure boundaries.")
+                                    help="Combine consecutive panels and wrap at detected measure boundaries.")
     rows_per_page = st.number_input("Tab rows per page", min_value=1, max_value=10, value=5,
                                     help="Five rows per page by default. The last page can have fewer rows. If both parts are selected, the aligned pair counts as one row.")
+    compact = st.checkbox("Fit complete sheet to a page limit", value=True)
+    max_pages = st.number_input("Maximum PDF pages", min_value=1, max_value=100, value=6, disabled=not compact)
+    st.caption("The page limit reduces spacing and size; it never removes music. Long videos may need more pages to stay readable.")
     a, b = st.columns(2)
     start = a.number_input("Start (seconds)", 0., float(info["duration"]), 0.)
     end = b.number_input("End (seconds)", 0., float(info["duration"]), float(info["duration"]))
@@ -127,12 +130,12 @@ if st.button("Extract tabs", type="primary"):
             bar.progress(1., text="Joining scrolling sections...")
             captures = stitch_scroll(captures, stats=st.session_state.stitch_stats, bars_per_line=bars_per_line)
         else:
-            captures = reflow_pages(captures, bars_per_line=bars_per_line)
+            captures = reflow_pages(captures, bars_per_line=bars_per_line, stats=st.session_state.stitch_stats)
         st.session_state.captures = captures
         st.session_state.selected = {}
         st.session_state.review_revision = st.session_state.get("review_revision", 0) + 1
         st.session_state.report = f"{len(captures)} captures from {total} samples; {missed} samples unreadable or without detected tabs."
-        st.session_state.settings = (interval, region, threshold, start, end, layout, bars_per_line, part)
+        st.session_state.settings = (interval, region, threshold, start, end, layout, bars_per_line, part, __version__)
     except Exception as error:
         st.error(str(error))
     finally:
@@ -140,6 +143,9 @@ if st.button("Extract tabs", type="primary"):
 
 if "report" in st.session_state:
     st.info(st.session_state.report)
+    uncertain = st.session_state.get("stitch_stats", {}).get("uncertain_times", [])
+    if uncertain:
+        st.warning("Bar boundaries need review near " + ", ".join(timestamp(t) for t in uncertain) + ". These panels were kept intact; the requested bar count is not guaranteed there.")
     breaks = st.session_state.get("stitch_stats", {}).get("breaks", 0)
     if breaks:
         times = ", ".join(timestamp(t) for t in st.session_state.stitch_stats.get("break_times", []))
@@ -155,7 +161,7 @@ if box and st.button("Add current preview as a manual capture"):
     st.session_state.review_revision = st.session_state.get("review_revision", 0) + 1
 captures = st.session_state.get("captures", [])
 if captures:
-    if st.session_state.get("settings") and st.session_state.settings != (interval, region, threshold, start, end, layout, bars_per_line, part):
+    if st.session_state.get("settings") and st.session_state.settings != (interval, region, threshold, start, end, layout, bars_per_line, part, __version__):
         st.warning("Settings changed. Extract again to apply them to existing captures.")
     st.write("Uncheck unwanted captures. Check for missing sections and partially visible notes before printing.")
     revision = st.session_state.get("review_revision", 0)
@@ -171,7 +177,11 @@ if captures:
     selected = [cap for i, cap in enumerate(captures) if st.session_state.selected.get(i, True)]
     st.caption(f"{len(selected)} of {len(captures)} captures selected")
     if selected:
-        pdf = make_pdf(selected, title or "Guitar tablature", st.session_state.source, paper, monochrome, rows_per_page=rows_per_page)
-        st.download_button("Download complete PDF", pdf, "guitar-tabs.pdf", "application/pdf", type="primary")
+        try:
+            pdf = make_pdf(selected, title or "Guitar tablature", st.session_state.source, paper, monochrome, rows_per_page=rows_per_page, max_pages=int(max_pages) if compact else None, show_timestamps=True)
+            st.download_button("Download complete PDF", pdf, "guitar-tabs.pdf", "application/pdf", type="primary")
+        except ValueError as error:
+            st.warning(str(error))
     else:
         st.warning("Select at least one capture to export.")
+

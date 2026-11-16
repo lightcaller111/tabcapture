@@ -35,6 +35,18 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(tab_system_rows(frame)),1)
         self.assertTrue(np.array_equal(select_tab_part(frame,'upper'),frame))
 
+    def test_adjacent_chord_diagram_excluded_from_crop(self):
+        frame=np.full((400,1280,3),20,np.uint8)
+        for y in range(180,281,20):
+            cv2.line(frame,(50,y),(950,y),(230,230,230),2)
+            cv2.line(frame,(1080,y),(1230,y),(230,230,230),2)
+        for x in range(1080,1231,30):
+            cv2.line(frame,(x,180),(x,280),(230,230,230),2)
+        box=detect_tab(frame)
+        self.assertIsNotNone(box)
+        self.assertLess(box[2],1050)
+        self.assertGreaterEqual(box[2],950)
+
     def test_auto_crop_stops_at_white_panel_edge(self):
         frame = np.full((400,1280,3),245,np.uint8)
         frame[:130] = (30,60,90)
@@ -147,6 +159,33 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(all(abs(w - (A4[0] - 56)) < .01 for w in widths[:3]))
         self.assertLess(widths[-1], widths[0] / 2)
         self.assertTrue(all(call.args[3] >= 28 for call in draw.call_args_list))
+
+    def test_stationary_panels_pack_across_repeated_sections(self):
+        from core import reflow_pages
+        panel = np.full((200, 801, 3), 255, np.uint8)
+        for y in range(50, 151, 20):
+            cv2.line(panel, (0,y), (800,y), (90,90,90), 1)
+        for x in (0,400,800):
+            cv2.line(panel, (x,50), (x,150), (0,0,0), 2)
+        captures = [Capture(t,panel.copy()) for t in range(5)]
+        stats = {}
+        rows = reflow_pages(captures, 4, stats)
+        self.assertEqual(stats['measures'],10)
+        self.assertEqual(stats['uncertain_times'],[])
+        self.assertEqual([r.bar_number for r in rows],[1,5,9])
+        self.assertEqual([r.time for r in rows],[0,2,4])
+        self.assertEqual(sum(r.image.shape[1] for r in rows),5*801)
+
+    def test_page_limit_keeps_every_row(self):
+        from unittest.mock import patch
+        from reportlab.pdfgen.canvas import Canvas
+        rows = [Capture(i,tab()) for i in range(39)]
+        original = Canvas.drawImage
+        with patch.object(Canvas,'drawImage',autospec=True,side_effect=original) as draw:
+            pdf = make_pdf(rows,max_pages=6)
+        self.assertEqual(len(draw.call_args_list),39)
+        self.assertEqual(pdf.count(b'/Type /Page\n'),6)
+        self.assertTrue(all(call.args[3]>=28 for call in draw.call_args_list))
 
     def test_dark_four_bar_row_stays_whole(self):
         from core import barline_positions, reflow_pages
