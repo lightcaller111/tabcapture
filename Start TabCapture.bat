@@ -21,5 +21,9 @@ if not exist .venv\installed.ok (
   )
   echo installed>.venv\installed.ok
 )
+echo Checking for YouTube downloader updates...
+.venv\Scripts\python.exe -m pip install --upgrade --disable-pip-version-check --timeout 10 --retries 1 "yt-dlp[default]"
+if errorlevel 1 echo Could not check for updates. Starting with the installed downloader.
 .venv\Scripts\python.exe -m streamlit run app.py --global.developmentMode false --server.address 127.0.0.1 --server.maxUploadSize 2048 --browser.gatherUsageStats false
 pause
+
